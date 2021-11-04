@@ -7,6 +7,8 @@ DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS player;
 DROP TABLE IF EXISTS team;
 DROP TABLE IF EXISTS position;
+DROP TABLE IF EXISTS league;
+DROP TABLE IF EXISTS team_league;
 
 CREATE TABLE position
 (
@@ -39,6 +41,14 @@ CREATE TABLE player
             REFERENCES position (name)
 );
 
+CREATE TABLE league
+(
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(255) NOT NULL,
+    description TEXT         NOT NULL
+);
+
+
 CREATE TABLE matches
 (
     id                       SERIAL PRIMARY KEY,
@@ -59,13 +69,6 @@ CREATE TABLE matches
             REFERENCES league (id)
 );
 
-CREATE TABLE league
-(
-    id          SERIAL PRIMARY KEY,
-    name        VARCHAR(255) NOT NULL,
-    description TEXT         NOT NULL
-);
-
 CREATE TABLE team_league
 (
     league_id    INT NOT NULL,
@@ -82,6 +85,102 @@ CREATE TABLE team_league
 
 );
 
+CREATE OR REPLACE PROCEDURE insert_match(ht_id INT, gt_id INT, ght INT,
+                                         ggt INT, l_id INT)
+
+    LANGUAGE plpgsql
+AS
+$$
+DECLARE
+    hosts_points  INT;
+    guests_points INT;
+BEGIN
+    IF l_id IS NULL THEN
+        INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team,
+                             goals_of_the_guests_team, league_id)
+        VALUES (ht_id, gt_id, ght, ggt, l_id);
+    ELSE
+        INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team,
+                             goals_of_the_guests_team, league_id)
+        VALUES (ht_id, gt_id, ght, ggt, l_id);
+
+        IF ght > ggt THEN
+            hosts_points = 3;
+            guests_points = 0;
+        ELSIF ght = ggt THEN
+            hosts_points = 1;
+            guests_points = 1;
+        ELSE
+            hosts_points = 0;
+            guests_points = 3;
+        END IF;
+
+        UPDATE team_league
+        SET points       = points + hosts_points,
+            goals_scored = goals_scored + ght,
+            goals_lost   = goals_lost + ggt
+        WHERE league_id = l_id
+          AND team_id = ht_id;
+
+        UPDATE team_league
+        SET points       = points + guests_points,
+            goals_scored = goals_scored + ggt,
+            goals_lost   = goals_lost + ght
+        WHERE league_id = l_id
+          AND team_id = gt_id;
+
+    END IF;
+END
+$$;
+
+
+CREATE OR REPLACE FUNCTION show_league_standings(INT)
+    RETURNS TABLE
+            (
+                league_id    INT,
+                team_id      INT,
+                points       INT,
+                goals_scored INT,
+                goals_lost   INT
+            )
+AS
+$$
+BEGIN
+    RETURN QUERY
+        SELECT l.*
+        FROM team_league AS l
+        WHERE l.league_id = $1
+        ORDER BY points, goals_scored, goals_lost;
+END
+$$
+    LANGUAGE plpgsql
+;
+
+CREATE OR REPLACE FUNCTION show_friendly_matches()
+    RETURNS TABLE
+            (
+                id                       INT,
+                hosts_team_id            INT,
+                guests_team_id           INT,
+                goals_of_the_hosts_team  INT,
+                goals_of_the_guests_team INT,
+                date                     TIMESTAMP
+            )
+AS
+$$
+BEGIN
+    RETURN QUERY
+        SELECT m.id,
+               m.hosts_team_id,
+               m.guests_team_id,
+               m.goals_of_the_hosts_team,
+               m.goals_of_the_guests_team,
+               m.date
+        FROM matches AS m
+        WHERE m.league_id IS NULL;
+END
+$$
+    LANGUAGE plpgsql;
 
 INSERT INTO position
 VALUES ('Goalkeeper'),
@@ -115,13 +214,12 @@ VALUES (1, 1),
        (1, 3),
        (1, 4);
 
-INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team, goals_of_the_guests_team, league_id)
-VALUES (1, 2, 3, 0, 1),
-       (3, 4, 2, 2, 1),
-       (2, 3, 2, 1, 1),
-       (4, 1, 1, 1, 1),
-       (2, 3, 0, 0, NULL);
-
+CALL insert_match(1, 2, 3, 0, 1);
+CALL insert_match(3, 4, 2, 2, 1);
+CALL insert_match(2, 3, 2, 1, 1);
+CALL insert_match(4, 1, 1, 1, 1);
+CALL insert_match(2, 3, 0, 0, NULL);
+CALL insert_match(1, 3, 4, 1, NULL);
 
 
 SELECT *
@@ -136,3 +234,9 @@ SELECT *
 FROM league;
 SELECT *
 FROM team_league;
+
+SELECT *
+FROM show_league_standings(1);
+
+SELECT *
+FROM show_friendly_matches();
