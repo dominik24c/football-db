@@ -48,7 +48,6 @@ CREATE TABLE league
     description TEXT         NOT NULL
 );
 
-
 CREATE TABLE matches
 (
     id                       SERIAL PRIMARY KEY,
@@ -69,10 +68,15 @@ CREATE TABLE matches
             REFERENCES league (id)
 );
 
+
+
 CREATE TABLE team_league
 (
     league_id    INT NOT NULL,
     team_id      INT NOT NULL,
+    won          INT DEFAULT 0,
+    drawn        INT DEFAULT 0,
+    lost         INT DEFAULT 0,
     points       INT DEFAULT 0,
     goals_lost   INT DEFAULT 0,
     goals_scored INT DEFAULT 0,
@@ -94,6 +98,9 @@ $$
 DECLARE
     hosts_points  INT;
     guests_points INT;
+    w             INT = 0;
+    d             INT = 0;
+    l             INT= 0;
 BEGIN
     IF l_id IS NULL THEN
         INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team,
@@ -107,25 +114,34 @@ BEGIN
         IF ght > ggt THEN
             hosts_points = 3;
             guests_points = 0;
+            w = 1;
         ELSIF ght = ggt THEN
             hosts_points = 1;
             guests_points = 1;
+            d = 1;
         ELSE
             hosts_points = 0;
             guests_points = 3;
+            l = 1;
         END IF;
 
         UPDATE team_league
         SET points       = points + hosts_points,
             goals_scored = goals_scored + ght,
-            goals_lost   = goals_lost + ggt
+            goals_lost   = goals_lost + ggt,
+            won          = won + w,
+            lost         = lost + l,
+            drawn        = drawn + d
         WHERE league_id = l_id
           AND team_id = ht_id;
 
         UPDATE team_league
         SET points       = points + guests_points,
             goals_scored = goals_scored + ggt,
-            goals_lost   = goals_lost + ght
+            goals_lost   = goals_lost + ght,
+            won          = won + l,
+            lost         = lost + w,
+            drawn        = drawn + d
         WHERE league_id = l_id
           AND team_id = gt_id;
 
@@ -137,50 +153,50 @@ $$;
 CREATE OR REPLACE FUNCTION show_league_standings(INT)
     RETURNS TABLE
             (
-                league_id    INT,
-                team_id      INT,
-                points       INT,
-                goals_scored INT,
-                goals_lost   INT
+                team            VARCHAR(150),
+                won             INT,
+                drawn           INT,
+                lost            INT,
+                points          INT,
+                goal_difference INT,
+                goals_scored    INT,
+                goals_lost      INT
             )
 AS
 $$
 BEGIN
     RETURN QUERY
-        SELECT l.*
+        SELECT t.name,
+               l.won,
+               l.drawn,
+               l.lost,
+               l.points,
+               l.goals_scored - l.goals_lost AS goal_difference,
+               l.goals_scored,
+               l.goals_lost
         FROM team_league AS l
+                 INNER JOIN team t on t.id = l.team_id
         WHERE l.league_id = $1
-        ORDER BY points, goals_scored, goals_lost;
+        ORDER BY points DESC, goal_difference DESC, goals_scored DESC, goals_lost;
+
 END
 $$
     LANGUAGE plpgsql
 ;
 
-CREATE OR REPLACE FUNCTION show_friendly_matches()
-    RETURNS TABLE
-            (
-                id                       INT,
-                hosts_team_id            INT,
-                guests_team_id           INT,
-                goals_of_the_hosts_team  INT,
-                goals_of_the_guests_team INT,
-                date                     TIMESTAMP
-            )
-AS
-$$
-BEGIN
-    RETURN QUERY
-        SELECT m.id,
-               m.hosts_team_id,
-               m.guests_team_id,
-               m.goals_of_the_hosts_team,
-               m.goals_of_the_guests_team,
-               m.date
-        FROM matches AS m
-        WHERE m.league_id IS NULL;
-END
-$$
-    LANGUAGE plpgsql;
+
+CREATE OR REPLACE VIEW friendly_matches AS
+SELECT m.id,
+       t.name  AS "host team",
+       t2.name AS "guest team",
+       m.goals_of_the_hosts_team,
+       m.goals_of_the_guests_team,
+       m.date
+FROM matches AS m
+         INNER JOIN team t on t.id = m.guests_team_id
+         INNER JOIN team t2 on t2.id = m.hosts_team_id
+WHERE m.league_id IS NULL;
+
 
 INSERT INTO position
 VALUES ('Goalkeeper'),
@@ -239,4 +255,4 @@ SELECT *
 FROM show_league_standings(1);
 
 SELECT *
-FROM show_friendly_matches();
+FROM friendly_matches;
