@@ -9,6 +9,7 @@ DROP TABLE IF EXISTS team;
 DROP TABLE IF EXISTS position;
 DROP TABLE IF EXISTS league;
 DROP TABLE IF EXISTS team_league;
+DROP TABLE IF EXISTS goals;
 
 CREATE TABLE position
 (
@@ -68,7 +69,18 @@ CREATE TABLE matches
             REFERENCES league (id)
 );
 
-
+CREATE TABLE goals
+(
+    player_id INT NOT NULL,
+    match_id  INT NOT NULL,
+    minute    INT NOT NULL,
+    CONSTRAINT fk_guests_team
+        FOREIGN KEY (player_id)
+            REFERENCES player (id),
+    CONSTRAINT fk_league
+        FOREIGN KEY (match_id)
+            REFERENCES matches (id)
+);
 
 CREATE TABLE team_league
 (
@@ -184,6 +196,55 @@ $$
     LANGUAGE plpgsql
 ;
 
+CREATE OR REPLACE PROCEDURE insert_goal(player INT, match INT, min INT) AS
+$$
+DECLARE
+    host_id         INT;
+    guest_id        INT;
+    current_team_id INT;
+    goals           INT;
+BEGIN
+    SELECT m.hosts_team_id, m.guests_team_id
+    INTO host_id, guest_id
+    FROM matches m
+    WHERE id = match;
+
+    current_team_id := (SELECT t.id
+                        FROM player p
+                                 INNER JOIN team t on t.id = p.team_id
+                        WHERE p.id = player);
+
+    --     raise notice 'Player team id %', current_team_id;
+--     raise notice 'host id %', host_id;
+--     raise notice 'guest id %', guest_id;
+
+    CASE current_team_id
+        WHEN host_id THEN IF (SELECT goals_of_the_hosts_team FROM matches WHERE id = match) <= (SELECT COUNT(*)
+              FROM goals g
+                       INNER JOIN matches m on g.match_id = m.id
+                       INNER JOIN team t on t.id = m.hosts_team_id
+              WHERE g.match_id = match)
+        THEN
+            RAISE EXCEPTION 'Hosts team has already saved all goals in the table';
+        END IF;
+
+        WHEN guest_id THEN IF (SELECT goals_of_the_guests_team FROM matches WHERE id = match) <=
+                              (SELECT COUNT(*)
+              FROM goals g
+                       INNER JOIN matches m on g.match_id = m.id
+                       INNER JOIN team t on t.id = m.guests_team_id
+              WHERE g.match_id = match) THEN
+            RAISE EXCEPTION 'Guests team has already saved all goals in the table';
+        END IF;
+
+        ELSE RAISE EXCEPTION 'Player doesnt belong to one of the teams, which played match';
+        END CASE;
+
+    INSERT INTO goals(player_id, match_id, minute)
+    VALUES (player, match, min);
+END
+$$
+    LANGUAGE plpgsql;
 
 CREATE OR REPLACE VIEW friendly_matches AS
 SELECT m.id,
@@ -216,7 +277,7 @@ VALUES ('Goalkeeper', 2, 'Andre', 'ter Stagen', 'germany', '1992-04-30'),
        ('Goalkeeper', 1, 'Rui', 'Patricio', 'portugal', '1988-02-15'),
        ('Defender', 1, 'Leonardo', 'Spinazzola', 'italy', '1993-03-25'),
        ('Forward', 3, 'Karim', 'Benzena', 'france', '1987-12-19'),
-       ('Midfielder', 3, 'Luka', 'Modric', 'coratia', '1985-09-09'),
+       ('Midfielder', 3, 'Luka', 'Modric', 'croatia', '1985-09-09'),
        ('Goalkeeper', 4, 'Kepa', 'Arrizabalaga', 'spain', '1994-10-03'),
        ('Midfielder', 4, 'Mason', 'Mount', 'england', '1999-01-10');
 
@@ -238,6 +299,17 @@ CALL insert_match(2, 3, 0, 0, NULL);
 CALL insert_match(1, 3, 4, 1, NULL);
 
 
+-- INSERT INTO goals(player_id, match_id, minute)
+-- VALUES (2, 1, 34),
+--        (2, 1, 50),
+--        (2, 1, 85);
+
+CALL insert_goal(4, 1, 34);
+CALL insert_goal(4, 1, 50);
+CALL insert_goal(4, 1, 85);
+-- CALL insert_goal(4, 1, 90);
+
+
 SELECT *
 FROM position;
 SELECT *
@@ -256,3 +328,5 @@ FROM show_league_standings(1);
 
 SELECT *
 FROM friendly_matches;
+SELECT *
+FROM goals;
