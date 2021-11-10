@@ -1,8 +1,14 @@
+----------------------- CREATE DATABASE ------------------------------
 DROP DATABASE IF EXISTS football;
-CREATE DATABASE football;
+CREATE DATABASE football
+WITH ENCODING 'UTF-8'
+LC_COLLATE 'en_US.UTF-8'
+LC_CTYPE 'en_US.UTF-8'
+TEMPLATE template0;
 
 \c football
 
+------------------ CREATE TABLES ---------------------------
 DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS player;
 DROP TABLE IF EXISTS team;
@@ -100,6 +106,13 @@ CREATE TABLE team_league
             REFERENCES team (id)
 
 );
+
+--------------------- CREATE INDEXES ----------------------------
+CREATE INDEX idx_team_name ON team(name);
+CREATE INDEX idx_player_firstname_lastname ON player(first_name,last_name);
+CREATE INDEX idx_league_name ON league(name);
+
+-------------- FUNCTIONS AND PROCEDURES -------------------
 
 CREATE OR REPLACE PROCEDURE insert_match(ht_id INT, gt_id INT, ght INT,
                                          ggt INT, l_id INT)
@@ -246,6 +259,7 @@ END
 $$
     LANGUAGE plpgsql;
 
+----------------- VIEW -------------------------
 CREATE OR REPLACE VIEW friendly_matches AS
 SELECT m.id,
        t.name  AS "host team",
@@ -258,6 +272,7 @@ FROM matches AS m
          INNER JOIN team t2 on t2.id = m.hosts_team_id
 WHERE m.league_id IS NULL;
 
+----- INSERT DATA -------
 
 INSERT INTO position
 VALUES ('Goalkeeper'),
@@ -298,11 +313,6 @@ CALL insert_match(4, 1, 1, 1, 1);
 CALL insert_match(2, 3, 0, 0, NULL);
 CALL insert_match(1, 3, 4, 1, NULL);
 
-
--- INSERT INTO goals(player_id, match_id, minute)
--- VALUES (2, 1, 34),
---        (2, 1, 50),
---        (2, 1, 85);
 
 CALL insert_goal(4, 1, 34);
 CALL insert_goal(4, 1, 50);
