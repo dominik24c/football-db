@@ -1,14 +1,15 @@
 ----------------------- CREATE DATABASE ------------------------------
 DROP DATABASE IF EXISTS football;
+
 CREATE DATABASE football
-WITH ENCODING 'UTF-8'
-LC_COLLATE 'en_US.UTF-8'
-LC_CTYPE 'en_US.UTF-8'
-TEMPLATE template0;
+    WITH ENCODING 'UTF-8'
+    LC_COLLATE 'en_US.UTF-8'
+    LC_CTYPE 'en_US.UTF-8'
+    TEMPLATE template0;
 
 \c football
 
------------------- CREATE TABLES ---------------------------
+--------------- REMOVE TABLES, SCHEMA AND ROLES IF EXISTS --------------------
 DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS player;
 DROP TABLE IF EXISTS team;
@@ -17,11 +18,16 @@ DROP TABLE IF EXISTS league;
 DROP TABLE IF EXISTS team_league;
 DROP TABLE IF EXISTS goals;
 
+DROP ROLE IF EXISTS root;
+DROP ROLE IF EXISTS test_user;
+DROP SCHEMA IF EXISTS football_schema;
+
+------------------ CREATE TABLES ---------------------------
+CREATE SCHEMA football_schema
 CREATE TABLE position
 (
-    name varchar(50) NOT NULL,
-    PRIMARY KEY (name)
-);
+    name varchar(50) PRIMARY KEY
+)
 
 CREATE TABLE team
 (
@@ -29,7 +35,11 @@ CREATE TABLE team
     name    varchar(150) NOT NULL,
     stadium varchar(100) NOT NULL,
     coach   varchar(200) NOT NULL
-);
+) PARTITION BY HASH (id)
+
+CREATE TABLE teams_0 PARTITION OF team FOR VALUES WITH (modulus 3, remainder 0)
+CREATE TABLE teams_1 PARTITION OF team FOR VALUES WITH (modulus 3, remainder 1)
+CREATE TABLE teams_2 PARTITION OF team FOR VALUES WITH (modulus 3, remainder 2)
 
 CREATE TABLE player
 (
@@ -46,14 +56,18 @@ CREATE TABLE player
     CONSTRAINT fk_position
         FOREIGN KEY (position)
             REFERENCES position (name)
-);
+)
 
 CREATE TABLE league
 (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(255) NOT NULL,
     description TEXT         NOT NULL
-);
+) PARTITION BY HASH (id)
+
+CREATE TABLE leagues_0 PARTITION OF league FOR VALUES WITH (modulus 3, remainder 0)
+CREATE TABLE leagues_1 PARTITION OF league FOR VALUES WITH (modulus 3, remainder 1)
+CREATE TABLE leagues_2 PARTITION OF league FOR VALUES WITH (modulus 3, remainder 2)
 
 CREATE TABLE matches
 (
@@ -73,7 +87,7 @@ CREATE TABLE matches
     CONSTRAINT fk_league
         FOREIGN KEY (league_id)
             REFERENCES league (id)
-);
+)
 
 CREATE TABLE goals
 (
@@ -86,7 +100,7 @@ CREATE TABLE goals
     CONSTRAINT fk_league
         FOREIGN KEY (match_id)
             REFERENCES matches (id)
-);
+)
 
 CREATE TABLE team_league
 (
@@ -107,15 +121,17 @@ CREATE TABLE team_league
 
 );
 
+SET search_path TO football_schema;
+
 --------------------- CREATE INDEXES ----------------------------
-CREATE INDEX idx_team_name ON team(name);
-CREATE INDEX idx_player_firstname_lastname ON player(first_name,last_name);
-CREATE INDEX idx_league_name ON league(name);
+CREATE INDEX idx_team_name ON team (name);
+CREATE INDEX idx_player_firstname_lastname ON player (first_name, last_name);
+CREATE INDEX idx_league_name ON league (name);
 
 -------------- FUNCTIONS AND PROCEDURES -------------------
 
 CREATE OR REPLACE PROCEDURE insert_match(ht_id INT, gt_id INT, ght INT,
-                                         ggt INT, l_id INT)
+                                         ggt INT, l_id INT, dt TIMESTAMP=NULL)
 
     LANGUAGE plpgsql
 AS
@@ -127,14 +143,18 @@ DECLARE
     d             INT = 0;
     l             INT= 0;
 BEGIN
+    IF dt IS NULL THEN
+        dt = NOW();
+    END IF;
+
     IF l_id IS NULL THEN
         INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team,
-                             goals_of_the_guests_team, league_id)
-        VALUES (ht_id, gt_id, ght, ggt, l_id);
+                             goals_of_the_guests_team, league_id, date)
+        VALUES (ht_id, gt_id, ght, ggt, l_id, dt);
     ELSE
         INSERT INTO matches (hosts_team_id, guests_team_id, goals_of_the_hosts_team,
-                             goals_of_the_guests_team, league_id)
-        VALUES (ht_id, gt_id, ght, ggt, l_id);
+                             goals_of_the_guests_team, league_id, date)
+        VALUES (ht_id, gt_id, ght, ggt, l_id, dt);
 
         IF ght > ggt THEN
             hosts_points = 3;
@@ -215,7 +235,6 @@ DECLARE
     host_id         INT;
     guest_id        INT;
     current_team_id INT;
-    goals           INT;
 BEGIN
     SELECT m.hosts_team_id, m.guests_team_id
     INTO host_id, guest_id
@@ -233,20 +252,20 @@ BEGIN
 
     CASE current_team_id
         WHEN host_id THEN IF (SELECT goals_of_the_hosts_team FROM matches WHERE id = match) <= (SELECT COUNT(*)
-              FROM goals g
-                       INNER JOIN matches m on g.match_id = m.id
-                       INNER JOIN team t on t.id = m.hosts_team_id
-              WHERE g.match_id = match)
+                                                                                                FROM goals g
+                                                                                                         INNER JOIN matches m on g.match_id = m.id
+                                                                                                         INNER JOIN team t on t.id = m.hosts_team_id
+                                                                                                WHERE g.match_id = match)
         THEN
             RAISE EXCEPTION 'Hosts team has already saved all goals in the table';
         END IF;
 
         WHEN guest_id THEN IF (SELECT goals_of_the_guests_team FROM matches WHERE id = match) <=
                               (SELECT COUNT(*)
-              FROM goals g
-                       INNER JOIN matches m on g.match_id = m.id
-                       INNER JOIN team t on t.id = m.guests_team_id
-              WHERE g.match_id = match) THEN
+                               FROM goals g
+                                        INNER JOIN matches m on g.match_id = m.id
+                                        INNER JOIN team t on t.id = m.guests_team_id
+                               WHERE g.match_id = match) THEN
             RAISE EXCEPTION 'Guests team has already saved all goals in the table';
         END IF;
 
@@ -272,7 +291,22 @@ FROM matches AS m
          INNER JOIN team t2 on t2.id = m.hosts_team_id
 WHERE m.league_id IS NULL;
 
------ INSERT DATA -------
+---------------- CREATE USERS -------------------
+CREATE ROLE root LOGIN PASSWORD 'secret_pass';
+CREATE ROLE test_user LOGIN  PASSWORD 'test1234';
+
+GRANT CONNECT ON DATABASE football TO root;
+GRANT ALL PRIVILEGES ON DATABASE football TO root;
+
+GRANT CONNECT ON DATABASE football TO test_user;
+GRANT SELECT ON ALL TABLES IN SCHEMA football_schema TO test_user;
+GRANT INSERT ON team,team_league,position, player, league TO test_user;
+GRANT EXECUTE ON PROCEDURE
+    football_schema.insert_match(INT,INT,INT,INT,INT,TIMESTAMP),
+    football_schema.insert_goal(INT,INT,INT) TO test_user;
+GRANT EXECUTE ON FUNCTION football_schema.show_league_standings(INT) TO test_user;
+
+---------------- INSERT DATA --------------------
 
 INSERT INTO position
 VALUES ('Goalkeeper'),
